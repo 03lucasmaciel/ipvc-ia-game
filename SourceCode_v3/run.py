@@ -11,6 +11,10 @@ from game import load_maze, init_agent, run_game
 from viewer import TextViewer, ColorViewer, GraphViewer
 
 
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.dirname(SCRIPT_DIR)
+
+
 def load_agent_class(name):
     """
     Loads an agent class by name.
@@ -25,8 +29,8 @@ def load_agent_class(name):
         class_name  = name[0].upper() + name[1:] + 'Agent'
         file_base   = f'{name}_agent'
 
-    py_path  = os.path.join('agents', file_base + '.py')
-    pyc_path = os.path.join('agents', file_base + '.pyc')
+    py_path  = os.path.join(SCRIPT_DIR, 'agents', file_base + '.py')
+    pyc_path = os.path.join(SCRIPT_DIR, 'agents', file_base + '.pyc')
 
     print(f"Loading agent '{name}' from module '{module_name}', class '{class_name}'...")
 
@@ -59,8 +63,7 @@ def load_agent_class(name):
         # Fallback for group agents: load shared file from repo root,
         # e.g. ../group19.py with class Group19.
         if name.lower().startswith('group') and name[5:].isdigit():
-            repo_root = os.path.dirname(os.path.dirname(__file__))
-            shared_file = os.path.join(repo_root, f"{name}.py")
+            shared_file = os.path.join(REPO_ROOT, f"{name}.py")
             if os.path.exists(shared_file):
                 try:
                     spec = importlib.util.spec_from_file_location(f"shared_{name}", shared_file)
@@ -126,7 +129,7 @@ def list_available_agents():
     Lists all available agent names in folder 'agents'.
     Returns a list of agent names (without _agent.py or .pyc extensions).
     """
-    agents_dir = os.path.join(os.path.dirname(__file__), 'agents')
+    agents_dir = os.path.join(SCRIPT_DIR, 'agents')
     
     py_pattern  = os.path.join(agents_dir, '*_agent.py')
     pyc_pattern = os.path.join(agents_dir, '*_agent.pyc')
