@@ -24,99 +24,121 @@ class Group19:
         """Distância de Manhattan."""
         return abs(p1[0] - p2[0]) + abs(p1[1] - p2[1])
 
-    def _bfs_limited(self, maze, start, max_depth=6):
-        """
-        BFS limitado até profundidade max_depth.
-        Retorna distância real (através de caminhos).
-        Profundidade reduzida para 6 por performance.
-        """
-        dist = {start: 0}
-        queue = deque([start])
-        depth_count = {start: 0}
-
-        while queue:
-            pos = queue.popleft()
-            current_depth = depth_count[pos]
-            
-            if current_depth >= max_depth:
-                continue
-
-            r, c = pos
-            for move, (dr, dc) in DELTAS.items():
-                nr, nc = r + dr, c + dc
-                new_pos = (nr, nc)
-
-                if new_pos in dist:
-                    continue
-                if not self._can_move_to(maze, new_pos):
-                    continue
-
-                dist[new_pos] = dist[pos] + 1
-                depth_count[new_pos] = current_depth + 1
-                queue.append(new_pos)
-
-        return dist
-
     def next_move(self, maze, prize_positions, agent_position, opponent_position):
         """
-        Estratégia: Greedy com BFS limitado (profundidade 6).
-        Para cada movimento possível, calcula score baseado:
-        1. Distância real ao melhor prémio (BFS)
-        2. Valor do prémio (pesa mais se >= 7)
-        3. Competição com adversário
+        Estratégia: Seleciona o melhor prémio reachable (por BFS distance),
+        depois segue o caminho BFS para ele.
+        OTIMIZADO: Calcula BFS UMA VEZ desde agent_position para todos os prémios.
+        MELHORADO: Tie-breaking por distância quando scores são iguais (dentro de 1%)
         """
         if not prize_positions:
             return Move.STAY
 
-        best_move = Move.STAY
-        best_score = float('-inf')
-
-        for move in [Move.UP, Move.DOWN, Move.LEFT, Move.RIGHT]:
-            dr, dc = DELTAS[move]
-            new_pos = (agent_position[0] + dr, agent_position[1] + dc)
+        agent_row, agent_col = agent_position
+        
+        # OTIMIZAÇÃO: Calcular BFS uma única vez desde a posição do agente
+        bfs_dist_map = self._bfs_distances_all(maze, agent_position)
+        
+        # Encontrar o melhor prémio reachable
+        best_prize = None
+        best_score = -1
+        best_distance = float('inf')
+        
+        for prize_pos, prize_value in prize_positions.items():
+            bfs_dist = bfs_dist_map.get(prize_pos, -1)
             
-            if not self._can_move_to(maze, new_pos):
+            if bfs_dist == -1:  # Não reachable
                 continue
-
-            # BFS limitado a partir da nova posição
-            dist_map = self._bfs_limited(maze, new_pos, max_depth=6)
-
-            # Encontra o melhor prémio acessível
-            best_score_move = float('-inf')
             
-            for prize_pos, prize_value in prize_positions.items():
-                # Usa distância real se BFS chegou
-                if prize_pos in dist_map:
-                    dist = dist_map[prize_pos]
-                else:
-                    # Fallback: Manhattan + penalidade por estar longe/inacessível
-                    dist = self._manhattan_dist(new_pos, prize_pos) + 3
-                
-                if dist == 0:
-                    # Prémio na posição! Retornar imediatamente
+            if bfs_dist == 0:  # Está ON TOP
+                return Move.STAY
+            
+            # Score: value / (distance ^ 1.2)
+            # Aumento significativo do peso da distância para favorecer prémios próximos
+            # Isto ajuda contra simpleHC em mazes pequenos
+            score = prize_value / (bfs_dist ** 1.2)
+            
+            # Tie-breaking: se scores são muito próximos (dif < 1%), preferir mais próximo
+            if best_prize is not None:
+                score_diff_percent = abs(score - best_score) / best_score * 100
+                if score_diff_percent < 1:  # Scores praticamente iguais
+                    # Preferir o mais próximo
+                    if bfs_dist < best_distance:
+                        best_score = score
+                        best_prize = prize_pos
+                        best_distance = bfs_dist
+                elif score > best_score:
+                    best_score = score
+                    best_prize = prize_pos
+                    best_distance = bfs_dist
+            else:
+                best_score = score
+                best_prize = prize_pos
+                best_distance = bfs_dist
+
+        if best_prize is None:
+            # Nenhum prémio reachable, explorar
+            for move in [Move.DOWN, Move.RIGHT, Move.UP, Move.LEFT]:
+                dr, dc = DELTAS[move]
+                new_pos = (agent_row + dr, agent_col + dc)
+                if self._can_move_to(maze, new_pos):
                     return move
-                
-                # Premia prémios de alto valor AGRESSIVAMENTE (A=10 até F=15)
-                # Aumenta multiplicador para priorizar prémios valiosos
-                if prize_value >= 10:
-                    score = (prize_value * 3.0) / dist  # Aumentado de 1.5 para 3.0
-                elif prize_value >= 7:
-                    score = (prize_value * 2.0) / dist  # Aumentado de 1.5 para 2.0
-                else:
-                    score = (prize_value * 1.2) / dist  # Pequeno multiplicador para baixos
-                
-                # Penalidade apenas se adversário está MUITO perto (dist <= 2)
-                opp_dist = self._manhattan_dist(opponent_position, prize_pos)
-                if opp_dist <= 2 and opp_dist < dist:
-                    score *= 0.75  # Penalidade mais severa se adversário está muito perto
-                elif opp_dist < dist and opp_dist <= 5:
-                    score *= 0.9   # Penalidade leve se adversário está moderadamente perto
-                
-                if score > best_score_move:
-                    best_score_move = score
-            
-            if best_score_move > best_score:
-                best_score = best_score_move
-                best_move = move
+            return Move.STAY
 
-        return best_move
+        # Move um passo em direção ao melhor prémio usando BFS path
+        path = self._bfs_path(maze, agent_position, best_prize)
+        if path and len(path) > 1:
+            next_pos = path[1]
+            dr = next_pos[0] - agent_row
+            dc = next_pos[1] - agent_col
+            
+            for move_enum, (delta_r, delta_c) in DELTAS.items():
+                if delta_r == dr and delta_c == dc:
+                    return move_enum
+        
+        return Move.STAY
+
+    def _bfs_distances_all(self, maze, start):
+        """Retorna um dicionário de todas as distâncias BFS desde start."""
+        distances = {start: 0}
+        queue = deque([start])
+        
+        while queue:
+            pos = queue.popleft()
+            r, c = pos
+            current_dist = distances[pos]
+            
+            for move, (dr, dc) in DELTAS.items():
+                nr, nc = r + dr, c + dc
+                new_pos = (nr, nc)
+                
+                if new_pos not in distances and self._can_move_to(maze, new_pos):
+                    distances[new_pos] = current_dist + 1
+                    queue.append(new_pos)
+        
+        return distances
+
+    def _bfs_path(self, maze, start, end):
+        """Retorna o caminho BFS mais curto entre start e end."""
+        if start == end:
+            return [start]
+        
+        visited = {start}
+        queue = deque([(start, [start])])
+        
+        while queue:
+            pos, path = queue.popleft()
+            r, c = pos
+            
+            for move, (dr, dc) in DELTAS.items():
+                nr, nc = r + dr, c + dc
+                new_pos = (nr, nc)
+                
+                if new_pos == end:
+                    return path + [new_pos]
+                
+                if new_pos not in visited and self._can_move_to(maze, new_pos):
+                    visited.add(new_pos)
+                    queue.append((new_pos, path + [new_pos]))
+        
+        return []  # Não reachable                                          
