@@ -12,186 +12,155 @@ DELTAS = {
 class Group19:
 
     def __init__(self, maze, prize_positions, agent_position, opponent_position, max_turns):
-        self.max_turns = max_turns
-        self.path = []
+        self.path = deque()
         self.target = None
+        self.rows = len(maze)
+        self.cols = len(maze[0])
 
-        self._num_rows = len(maze)
-        self._num_cols = len(maze[0])
+    # ------------------------------------------------------------
+    # Manhattan distance
+    # ------------------------------------------------------------
+    def _manhattan(self, a, b):
+        return abs(a[0] - b[0]) + abs(a[1] - b[1])
 
-        # Cache de distâncias BFS: start -> {pos: dist}
-        self._dist_cache = {}
+    # ------------------------------------------------------------
+    # Greedy step (rápido tipo SimpleHC)
+    # ------------------------------------------------------------
+    def _greedy_step(self, maze, agent_pos, prize_positions):
+        row, col = agent_pos
 
-        # Pré-computar distâncias a partir da posição do agente, do adversário
-        # e de todos os prémios — next_move nunca precisa de correr BFS de raiz
-        all_starts = (
-            [agent_position, opponent_position]
-            + list(prize_positions.keys())
-        )
-        for pos in all_starts:
-            if pos not in self._dist_cache:
-                self._dist_cache[pos] = self._bfs_distances(maze, pos)
+        def best_dist(r, c):
+            return min(self._manhattan((r, c), p) for p in prize_positions)
 
-    # ------------------------------------------------------------------
-    # BFS completo: devolve {pos: distância} a partir de start
-    # ------------------------------------------------------------------
-    def _bfs_distances(self, maze, start):
-        dist = {start: 0}
-        queue = deque([start])
-        num_rows = len(maze)
-        num_cols = len(maze[0])
-        while queue:
-            pos = queue.popleft()
-            r, c = pos
-            for dr, dc in DELTAS.values():
-                nr, nc = r + dr, c + dc
-                npos = (nr, nc)
-                if npos in dist:
-                    continue
-                if not (0 <= nr < num_rows and 0 <= nc < num_cols):
-                    continue
-                if maze[nr][nc] == '#':
-                    continue
-                dist[npos] = dist[pos] + 1
-                queue.append(npos)
-        return dist
+        best_move = Move.STAY
+        best_val = float('inf')
 
-    # ------------------------------------------------------------------
-    # BFS que devolve o caminho (lista de Move) de start até goal
-    # ------------------------------------------------------------------
+        for move, (dr, dc) in DELTAS.items():
+            nr, nc = row + dr, col + dc
+
+            if not (0 <= nr < self.rows and 0 <= nc < self.cols):
+                continue
+            if maze[nr][nc] == '#':
+                continue
+
+            dist = best_dist(nr, nc)
+
+            if dist < best_val:
+                best_val = dist
+                best_move = move
+
+        return best_move
+
+    # ------------------------------------------------------------
+    # BFS path (usado raramente)
+    # ------------------------------------------------------------
     def _bfs_path(self, maze, start, goal):
         if start == goal:
-            return []
-        num_rows = len(maze)
-        num_cols = len(maze[0])
+            return deque()
+
         visited = {start: None}
         queue = deque([start])
+
         while queue:
-            pos = queue.popleft()
-            r, c = pos
+            r, c = queue.popleft()
+
             for move, (dr, dc) in DELTAS.items():
                 nr, nc = r + dr, c + dc
-                npos = (nr, nc)
-                if npos in visited:
+                pos = (nr, nc)
+
+                if pos in visited:
                     continue
-                if not (0 <= nr < num_rows and 0 <= nc < num_cols):
+                if not (0 <= nr < self.rows and 0 <= nc < self.cols):
                     continue
                 if maze[nr][nc] == '#':
                     continue
-                visited[npos] = (pos, move)
-                if npos == goal:
-                    path = []
-                    cur = npos
+
+                visited[pos] = ((r, c), move)
+
+                if pos == goal:
+                    path = deque()
+                    cur = pos
                     while visited[cur] is not None:
                         parent, mv = visited[cur]
-                        path.append(mv)
+                        path.appendleft(mv)
                         cur = parent
-                    path.reverse()
                     return path
-                queue.append(npos)
-        return None
 
-    # ------------------------------------------------------------------
-    # Distância BFS com cache (lazy para posições mid-game)
-    # ------------------------------------------------------------------
-    def _get_dist(self, maze, frm, to):
-        if frm not in self._dist_cache:
-            self._dist_cache[frm] = self._bfs_distances(maze, frm)
-        return self._dist_cache[frm].get(to, float('inf'))
+                queue.append(pos)
 
-    # ------------------------------------------------------------------
-    # Scoring de um prémio face ao estado atual
-    #
-    # Lógica:
-    #   advantage > 1  → prémio "nosso"   → score = val/dist + bónus territorial
-    #   advantage >= -1 → corrida apertada → score moderado
-    #   advantage < -1  → prémio "dele"   → score muito penalizado
-    # ------------------------------------------------------------------
-    def _score_prize(self, dist_me, dist_opp, prize_val):
-        if dist_me == float('inf'):
-            return -float('inf')
+        return deque()
 
-        advantage = dist_opp - dist_me  # positivo = chegamos antes
-
-        if advantage > 1:
-            # Prémio garantido — maximizar ratio e recompensar vantagem territorial
-            base = prize_val / dist_me
-            territorial_bonus = min(advantage * 0.3, 2.0)
-            return base + territorial_bonus
-
-        elif advantage >= -1:
-            # Corrida apertada — ainda pode compensar para valores altos
-            base = prize_val / dist_me
-            return base * 0.6
-
-        else:
-            # Adversário chega bem antes — só ir se não há nada melhor
-            base = prize_val / dist_me
-            return base * 0.05
-
-    # ------------------------------------------------------------------
-    # Escolhe o melhor target com base no scoring
-    # ------------------------------------------------------------------
-    def _pick_best_target(self, maze, prize_positions, agent_pos, opponent_pos):
+    # ------------------------------------------------------------
+    # Escolha de target (leve e rápida)
+    # ------------------------------------------------------------
+    def _choose_target(self, agent_pos, opponent_pos, prize_positions):
         best_target = None
         best_score = -float('inf')
 
-        for prize_pos, prize_val in prize_positions.items():
-            dist_me = self._get_dist(maze, agent_pos, prize_pos)
-            dist_opp = self._get_dist(maze, opponent_pos, prize_pos)
-            score = self._score_prize(dist_me, dist_opp, prize_val)
+        for p, val in prize_positions.items():
+            d_me = self._manhattan(agent_pos, p)
+            d_opp = self._manhattan(opponent_pos, p)
+
+            if d_me == 0:
+                return p
+
+            score = val / d_me
+
+            # Penalizar se adversário estiver mais perto
+            if d_opp < d_me:
+                score *= 0.3
+
+            # Incentivar disputa direta
+            elif d_opp == d_me:
+                score *= 1.2
 
             if score > best_score:
                 best_score = score
-                best_target = prize_pos
+                best_target = p
 
-        if best_target is None:
-            return None, []
+        return best_target
 
-        path = self._bfs_path(maze, agent_pos, best_target)
-        return best_target, (path if path else [])
-
-    # ------------------------------------------------------------------
-    # Decide se deve replanear
-    # ------------------------------------------------------------------
-    def _should_replan(self, maze, prize_positions, agent_pos, opponent_pos):
+    # ------------------------------------------------------------
+    # Replaneamento leve
+    # ------------------------------------------------------------
+    def _should_replan(self, prize_positions):
         if self.target not in prize_positions:
             return True
         if not self.path:
             return True
-        # Adversário interceptou — vai chegar antes
-        dist_opp = self._get_dist(maze, opponent_pos, self.target)
-        if dist_opp < len(self.path) - 1:
-            return True
         return False
 
-    # ------------------------------------------------------------------
-    # next_move principal
-    # ------------------------------------------------------------------
+    # ------------------------------------------------------------
+    # MAIN
+    # ------------------------------------------------------------
     def next_move(self, maze, prize_positions, agent_position, opponent_position):
+
         if not prize_positions:
             return Move.STAY
 
-        if self._should_replan(maze, prize_positions, agent_position, opponent_position):
-            self.target, self.path = self._pick_best_target(
-                maze, prize_positions, agent_position, opponent_position
-            )
+        # Replanear apenas quando necessário
+        if self._should_replan(prize_positions):
+            self.target = self._choose_target(agent_position, opponent_position, prize_positions)
 
-        if not self.path:
-            return Move.STAY
+            # Só usa BFS se estiver longe (evita custo desnecessário)
+            if self._manhattan(agent_position, self.target) > 4:
+                self.path = self._bfs_path(maze, agent_position, self.target)
+            else:
+                self.path = deque()
 
-        # Verificação de segurança: próximo passo não é parede
-        next_action = self.path[0]
-        dr, dc = DELTAS[next_action]
-        r, c = agent_position
-        nr, nc = r + dr, c + dc
-        if not (0 <= nr < self._num_rows and 0 <= nc < self._num_cols):
-            self.path = []
-            self.target = None
+        # Se temos caminho → seguir
+        if self.path:
+            move = self.path.popleft()
+        else:
+            move = self._greedy_step(maze, agent_position, prize_positions)
+
+        # Segurança
+        dr, dc = DELTAS[move]
+        nr, nc = agent_position[0] + dr, agent_position[1] + dc
+
+        if not (0 <= nr < self.rows and 0 <= nc < self.cols):
             return Move.STAY
         if maze[nr][nc] == '#':
-            self.path = []
-            self.target = None
             return Move.STAY
 
-        return self.path.pop(0)
+        return move
