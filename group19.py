@@ -1,4 +1,5 @@
 from move import Move
+from collections import deque
 
 DELTAS = {
     Move.UP:    (-1,  0),
@@ -14,66 +15,80 @@ class Group19:
         self.rows = len(maze)
         self.cols = len(maze[0])
 
-    # Manhattan
-    def _manhattan(self, a, b):
-        return abs(a[0] - b[0]) + abs(a[1] - b[1])
+    # ------------------------------------------------------------
+    # BFS completo (UMA VEZ POR TURNO)
+    # ------------------------------------------------------------
+    def _bfs(self, maze, start):
+        dist = {start: 0}
+        parent = {start: None}
+        move_map = {}
 
-    # Escolher melhor prémio (ULTRA RÁPIDO)
-    def _best_target(self, agent_pos, opponent_pos, prize_positions):
-        best = None
-        best_score = -1
+        queue = deque([start])
 
-        for p, val in prize_positions.items():
-            d_me = self._manhattan(agent_pos, p)
-            d_opp = self._manhattan(opponent_pos, p)
+        while queue:
+            r, c = queue.popleft()
 
-            if d_me == 0:
-                return p
+            for move, (dr, dc) in DELTAS.items():
+                nr, nc = r + dr, c + dc
+                pos = (nr, nc)
 
-            score = val / d_me
+                if pos in dist:
+                    continue
+                if not (0 <= nr < self.rows and 0 <= nc < self.cols):
+                    continue
+                if maze[nr][nc] == '#':
+                    continue
 
-            # pequena inteligência contra adversário (leve!)
-            if d_opp < d_me:
-                score *= 0.5
+                dist[pos] = dist[(r, c)] + 1
+                parent[pos] = (r, c)
+                move_map[pos] = move
+                queue.append(pos)
 
-            if score > best_score:
-                best_score = score
-                best = p
+        return dist, parent, move_map
 
-        return best
+    # ------------------------------------------------------------
+    # reconstruir caminho
+    # ------------------------------------------------------------
+    def _get_first_move(self, parent, move_map, start, goal):
+        cur = goal
+        while parent[cur] != start:
+            cur = parent[cur]
+        return move_map[cur]
 
-    # Movimento greedy (tipo SimpleHC mas melhor)
-    def _move_towards(self, maze, agent_pos, target):
-        r, c = agent_pos
-
-        best_move = Move.STAY
-        best_dist = float('inf')
-
-        for move, (dr, dc) in DELTAS.items():
-            nr, nc = r + dr, c + dc
-
-            if not (0 <= nr < self.rows and 0 <= nc < self.cols):
-                continue
-            if maze[nr][nc] == '#':
-                continue
-
-            d = self._manhattan((nr, nc), target)
-
-            if d < best_dist:
-                best_dist = d
-                best_move = move
-
-        return best_move
-
+    # ------------------------------------------------------------
     # MAIN
+    # ------------------------------------------------------------
     def next_move(self, maze, prize_positions, agent_position, opponent_position):
 
         if not prize_positions:
             return Move.STAY
 
-        target = self._best_target(agent_position, opponent_position, prize_positions)
+        # BFS global
+        dist, parent, move_map = self._bfs(maze, agent_position)
 
-        if not target:
+        best_target = None
+        best_score = -1
+
+        for p, val in prize_positions.items():
+            if p not in dist:
+                continue
+
+            d = dist[p]
+            if d == 0:
+                return Move.STAY
+
+            score = val / d
+
+            # leve consideração do adversário
+            opp_dist = abs(opponent_position[0] - p[0]) + abs(opponent_position[1] - p[1])
+            if opp_dist < d:
+                score *= 0.7
+
+            if score > best_score:
+                best_score = score
+                best_target = p
+
+        if best_target is None:
             return Move.STAY
 
-        return self._move_towards(maze, agent_position, target)
+        return self._get_first_move(parent, move_map, agent_position, best_target)
