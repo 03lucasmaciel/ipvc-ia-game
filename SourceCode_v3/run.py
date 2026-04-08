@@ -56,6 +56,24 @@ def load_agent_class(name):
             return None
 
     else:
+        # Fallback for group agents: load shared file from repo root,
+        # e.g. ../group19.py with class Group19.
+        if name.lower().startswith('group') and name[5:].isdigit():
+            repo_root = os.path.dirname(os.path.dirname(__file__))
+            shared_file = os.path.join(repo_root, f"{name}.py")
+            if os.path.exists(shared_file):
+                try:
+                    spec = importlib.util.spec_from_file_location(f"shared_{name}", shared_file)
+                    module = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(module)
+                    return getattr(module, class_name)
+                except AttributeError:
+                    print(f"Error: file '{name}.py' does not contain a class named '{class_name}'.")
+                    return None
+                except Exception as e:
+                    print(f"Error loading shared agent file '{name}.py': {e}")
+                    return None
+
         print(f"Error: could not find '{file_base}.py' or '{file_base}.pyc' in 'agents/' folder.")
         return None
 
