@@ -15,80 +15,108 @@ class Group19:
         self.rows = len(maze)
         self.cols = len(maze[0])
 
-    # ------------------------------------------------------------
-    # BFS completo (UMA VEZ POR TURNO)
-    # ------------------------------------------------------------
-    def _bfs(self, maze, start):
-        dist = {start: 0}
-        parent = {start: None}
-        move_map = {}
+    def _can_move_to(self, maze, pos):
+        """Verifica se pode mover para uma posição."""
+        r, c = pos
+        return (0 <= r < self.rows and 0 <= c < self.cols and maze[r][c] != '#')
 
+    def _manhattan_dist(self, p1, p2):
+        """Distância de Manhattan."""
+        return abs(p1[0] - p2[0]) + abs(p1[1] - p2[1])
+
+    def _bfs_limited(self, maze, start, max_depth=6):
+        """
+        BFS limitado até profundidade max_depth.
+        Retorna distância real (através de caminhos).
+        Profundidade reduzida para 6 por performance.
+        """
+        dist = {start: 0}
         queue = deque([start])
+        depth_count = {start: 0}
 
         while queue:
-            r, c = queue.popleft()
+            pos = queue.popleft()
+            current_depth = depth_count[pos]
+            
+            if current_depth >= max_depth:
+                continue
 
+            r, c = pos
             for move, (dr, dc) in DELTAS.items():
                 nr, nc = r + dr, c + dc
-                pos = (nr, nc)
+                new_pos = (nr, nc)
 
-                if pos in dist:
+                if new_pos in dist:
                     continue
-                if not (0 <= nr < self.rows and 0 <= nc < self.cols):
-                    continue
-                if maze[nr][nc] == '#':
+                if not self._can_move_to(maze, new_pos):
                     continue
 
-                dist[pos] = dist[(r, c)] + 1
-                parent[pos] = (r, c)
-                move_map[pos] = move
-                queue.append(pos)
+                dist[new_pos] = dist[pos] + 1
+                depth_count[new_pos] = current_depth + 1
+                queue.append(new_pos)
 
-        return dist, parent, move_map
+        return dist
 
-    # ------------------------------------------------------------
-    # reconstruir caminho
-    # ------------------------------------------------------------
-    def _get_first_move(self, parent, move_map, start, goal):
-        cur = goal
-        while parent[cur] != start:
-            cur = parent[cur]
-        return move_map[cur]
-
-    # ------------------------------------------------------------
-    # MAIN
-    # ------------------------------------------------------------
     def next_move(self, maze, prize_positions, agent_position, opponent_position):
-
+        """
+        Estratégia: Greedy com BFS limitado (profundidade 6).
+        Para cada movimento possível, calcula score baseado:
+        1. Distância real ao melhor prémio (BFS)
+        2. Valor do prémio (pesa mais se >= 7)
+        3. Competição com adversário
+        """
         if not prize_positions:
             return Move.STAY
 
-        # BFS global
-        dist, parent, move_map = self._bfs(maze, agent_position)
+        best_move = Move.STAY
+        best_score = float('-inf')
 
-        best_target = None
-        best_score = -1
-
-        for p, val in prize_positions.items():
-            if p not in dist:
+        for move in [Move.UP, Move.DOWN, Move.LEFT, Move.RIGHT]:
+            dr, dc = DELTAS[move]
+            new_pos = (agent_position[0] + dr, agent_position[1] + dc)
+            
+            if not self._can_move_to(maze, new_pos):
                 continue
 
-            d = dist[p]
-            if d == 0:
-                return Move.STAY
+            # BFS limitado a partir da nova posição
+            dist_map = self._bfs_limited(maze, new_pos, max_depth=6)
 
-            score = val / d
+            # Encontra o melhor prémio acessível
+            best_score_move = float('-inf')
+            
+            for prize_pos, prize_value in prize_positions.items():
+                # Usa distância real se BFS chegou
+                if prize_pos in dist_map:
+                    dist = dist_map[prize_pos]
+                else:
+                    # Fallback: Manhattan + penalidade por estar longe/inacessível
+                    dist = self._manhattan_dist(new_pos, prize_pos) + 3
+                
+                if dist == 0:
+                    # Prémio na posição! Retornar imediatamente
+                    return move
+                
+                # Premia prémios de alto valor AGRESSIVAMENTE (A=10 até F=15)
+                # Aumenta multiplicador para priorizar prémios valiosos
+                if prize_value >= 10:
+                    score = (prize_value * 3.0) / dist  # Aumentado de 1.5 para 3.0
+                elif prize_value >= 7:
+                    score = (prize_value * 2.0) / dist  # Aumentado de 1.5 para 2.0
+                else:
+                    score = (prize_value * 1.2) / dist  # Pequeno multiplicador para baixos
+                
+                # Penalidade apenas se adversário está MUITO perto (dist <= 2)
+                opp_dist = self._manhattan_dist(opponent_position, prize_pos)
+                if opp_dist <= 2 and opp_dist < dist:
+                    score *= 0.75  # Penalidade mais severa se adversário está muito perto
+                elif opp_dist < dist and opp_dist <= 5:
+                    score *= 0.9   # Penalidade leve se adversário está moderadamente perto
+                
+                if score > best_score_move:
+                    best_score_move = score
+            
+            if best_score_move > best_score:
+                best_score = best_score_move
+                best_move = move
 
-            # leve consideração do adversário
-            opp_dist = abs(opponent_position[0] - p[0]) + abs(opponent_position[1] - p[1])
-            if opp_dist < d:
-                score *= 0.7
-
-            if score > best_score:
-                best_score = score
-                best_target = p
-
-        if best_target is None:
-            return Move.STAY
-
-        return self._get_first_move(parent, move_map, agent_position, best_target)
+        return best_move
